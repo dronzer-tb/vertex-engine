@@ -12,6 +12,6 @@ public interface ModuleContext {
      */
     void registerChunkGeneration(ChunkGenerationHook hook);
 
-    /** {@code vertex/modules/<id>/}, created on demand, for this module's config and data. */
+    /** {@code vertex/<id>/}, created on demand, for this module's config and data. */
     Path dataDirectory();
 }

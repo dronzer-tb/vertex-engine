@@ -2,9 +2,11 @@ package dev.vertex.engine;
 
 import com.mojang.logging.LogUtils;
 import dev.vertex.engine.api.ChunkGenerationHook;
+import dev.vertex.engine.api.ChunkRequest;
 import dev.vertex.engine.api.ChunkTarget;
 import dev.vertex.engine.api.HookResult;
 import dev.vertex.engine.api.ModuleContext;
+import dev.vertex.engine.api.Vertex;
 import dev.vertex.engine.api.VertexModule;
 import org.slf4j.Logger;
 
@@ -88,16 +90,17 @@ public final class VertexEngine {
      * Dispatches one chunk to the registered hook. Returns {@code FALLBACK} -- never throws --
      * when no module is registered or the module itself fails, so the caller runs vanilla.
      */
-    public HookResult generateChunk(long seed, int chunkX, int chunkZ, ChunkTarget target) {
+    public HookResult generateChunk(ChunkRequest request, ChunkTarget target) {
         ChunkGenerationHook hook = this.chunkHook;
         if (hook == null) {
             return HookResult.fallback(HookResult.FallbackReason.NO_MODULE);
         }
         try {
-            return hook.generate(seed, chunkX, chunkZ, target);
+            return hook.generate(request, target);
         } catch (Throwable t) {
-            LOGGER.error(TAG + "module threw generating chunk (" + chunkX + ", " + chunkZ
-                    + ") -- falling back to vanilla", t);
+            LOGGER.error(TAG + "module threw generating chunk (" + request.chunkX() + ", "
+                    + request.chunkZ() + ") in " + request.dimensionId()
+                    + " -- falling back to vanilla", t);
             return HookResult.fallback(HookResult.FallbackReason.MODULE_ERROR);
         }
     }
@@ -150,11 +153,16 @@ public final class VertexEngine {
                 throw new IllegalStateException("chunk generation is already registered by another module");
             }
             VertexEngine.this.chunkHook = hook;
+            // Visible to Bukkit plugins too, which load later under a different class loader
+            // and need to know the server's own terrain generation is no longer running.
+            Vertex.markChunkGenerationHooked();
         }
 
         @Override
         public Path dataDirectory() {
-            Path dir = VertexEngine.this.moduleDir.resolve(this.module.id());
+            // vertex/<id>/, a sibling of vertex/modules/ -- module state does not belong in
+            // the directory an operator drops jars into and clears out.
+            Path dir = VertexEngine.this.moduleDir.getParent().resolve(this.module.id());
             try {
                 Files.createDirectories(dir);
             } catch (IOException e) {

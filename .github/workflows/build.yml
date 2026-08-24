@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     # Only run on PRs if the source branch is on someone else's repo
@@ -41,3 +45,13 @@ jobs:
           name: vertex-engine-api
           path: vertex-engine-api/build/libs/*.jar
           if-no-files-found: error
+
+      # Modules build against this coordinate, so it has to exist somewhere they can resolve it
+      # from. Only from the default branch: a feature branch republishing 0.1.0 would silently
+      # change what every module compiles against.
+      - name: Publish Vertex Engine API
+        if: github.ref == 'refs/heads/vertex' && github.event_name == 'push'
+        run: ./gradlew :vertex-engine-api:publishAllPublicationsToGitHubPackagesRepository
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

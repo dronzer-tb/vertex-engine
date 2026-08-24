@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dronzer-tb <36neelansh@gmail.com>
+Date: Tue, 25 Aug 2026 05:16:54 +0530
+Subject: [PATCH] Vertex Engine chunk generation hook
+
+Boots the engine before the plugin system, and offers each chunk to a
+registered module ahead of the server's own noise pass. With no modules
+installed neither call does anything and generation is unchanged.
+
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+index 5f89d29eaeeb4c63b8b9e034d440204f518efec2..f7e6d83071fde76b331726d24907c605f0061770 100644
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -337,6 +337,12 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+             return false;
+         }
+ 
++        // Vertex start - boot the engine before the plugin system
++        // Modules register hooks that must be in place before any world loads, which is why this
++        // sits above loadPlugins() rather than being a plugin itself. With no modules installed
++        // it registers nothing and the server generates exactly as unmodified Folia does.
++        dev.vertex.engine.VertexEngine.boot(this.getServerDirectory().toFile());
++        // Vertex end - boot the engine before the plugin system
+         // CraftBukkit start
+         this.server.loadPlugins();
+         this.server.enablePlugins(org.bukkit.plugin.PluginLoadOrder.STARTUP);
+diff --git a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
+index 6eb1a3a83c5bae8935c042396d676f7a3450e135..95006cb28cac734a45ab101d312c1df0f551ea40 100644
+--- a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
++++ b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
+@@ -86,6 +86,11 @@ public class ChunkStatusTasks {
+         final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
+     ) {
+         ServerLevel level = context.level();
++        // Vertex start - offer the chunk to a module before the server's own noise pass
++        if (dev.vertex.engine.VertexChunkBridge.generateNoise(level, context.generator(), chunk)) {
++            return CompletableFuture.completedFuture(chunk);
++        }
++        // Vertex end - offer the chunk to a module before the server's own noise pass
+         WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
+         return context.generator()
+             .fillFromNoise(Blender.of(region), level.getChunkSource().randomState(), level.structureManager().forWorldGenRegion(region), chunk)
