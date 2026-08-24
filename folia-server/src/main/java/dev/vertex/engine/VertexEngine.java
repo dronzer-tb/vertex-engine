@@ -1,7 +1,11 @@
 package dev.vertex.engine;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.world.level.chunk.ChunkAccess;
+import dev.vertex.engine.api.ChunkGenerationHook;
+import dev.vertex.engine.api.ChunkTarget;
+import dev.vertex.engine.api.HookResult;
+import dev.vertex.engine.api.ModuleContext;
+import dev.vertex.engine.api.VertexModule;
 import org.slf4j.Logger;
 
 import java.io.File;
@@ -16,15 +20,21 @@ import java.util.ServiceLoader;
 import java.util.stream.Stream;
 
 /**
- * The Vertex Engine: a module and hook registry that sits between Folia and Rust-backed
- * subsystems such as Oxide.
+ * The Vertex Engine: a module and hook registry sitting between the server and subsystems such
+ * as Oxide.
  *
- * <p>Booted from {@code DedicatedServer#initServer} before {@code loadPlugins()}, which is the
- * last point at which a hook can be registered before worlds load. Modules are ordinary jars in
+ * <p>Booted from {@code DedicatedServer#initServer} before {@code loadPlugins()} -- the last
+ * point at which a hook can be registered before worlds load. Modules are ordinary jars in
  * {@code vertex/modules/}; they are not Bukkit plugins and cannot use the Bukkit API at enable
  * time, because the plugin system does not exist yet.
  *
- * <p>Every failure path here ends in vanilla generation, never in a half-installed hook.
+ * <p>With no modules installed the engine registers nothing and every dispatch returns
+ * {@code FALLBACK}, so the server generates exactly as unmodified Folia does. That is the
+ * intended default, not a degraded mode.
+ *
+ * <p>This class holds no Minecraft types. The conversion between the server's chunk and
+ * {@link ChunkTarget} happens at the patched call site, keeping the fork's contact with upstream
+ * code to a single method.
  */
 public final class VertexEngine {
 
@@ -41,53 +51,50 @@ public final class VertexEngine {
         this.moduleDir = moduleDir;
     }
 
-    /** The booted engine, or {@code null} when Vertex did not start. */
+    /** The booted engine. Never null once {@link #boot} has run. */
     public static VertexEngine get() {
         return instance;
     }
 
+    /** Whether any module has taken over chunk generation. */
+    public boolean hasChunkGeneration() {
+        return this.chunkHook != null;
+    }
+
     /**
-     * Entry point patched into {@code DedicatedServer#initServer}. Safe to call once; a second
-     * call is ignored rather than rebuilding the registry underneath a live server.
+     * Entry point patched into {@code DedicatedServer#initServer}. A second call is ignored
+     * rather than rebuilding the registry underneath a running server.
      */
     public static void boot(File serverDirectory) {
         if (instance != null) {
             return;
         }
-        LOGGER.info(TAG + VertexBrand.NAME + " Engine " + VertexBrand.ENGINE_VERSION
-                + " (" + VertexBrand.lineage() + ")");
-
         VertexEngine engine = new VertexEngine(serverDirectory.toPath().resolve("vertex").resolve("modules"));
         engine.loadModules();
         instance = engine;
 
-        LOGGER.info(TAG + "Ready -- " + engine.modules.size() + " module(s), "
-                + (engine.chunkHook != null ? "chunk-generation hook active" : "no hooks registered"));
-    }
-
-    /**
-     * Registers the chunk-generation hook. One module owns terrain; a second registration is
-     * refused rather than silently replacing the first, since which one won would depend on
-     * module load order.
-     */
-    public void register(ChunkGenerationHook hook) {
-        if (this.chunkHook != null) {
-            throw new IllegalStateException("a chunk-generation hook is already registered");
+        if (engine.modules.isEmpty()) {
+            // Nothing installed: stay quiet and behave as stock Folia. One line, so an operator
+            // can still tell the engine is present and looking in the right place.
+            LOGGER.info(TAG + VertexBrand.NAME + " Engine " + VertexBrand.ENGINE_VERSION
+                    + " -- no modules in " + engine.moduleDir + ", running stock generation");
+            return;
         }
-        this.chunkHook = hook;
+        LOGGER.info(TAG + "Ready -- " + engine.modules.size() + " module(s), "
+                + (engine.hasChunkGeneration() ? "chunk generation" : "no chunk generation") + " hooked");
     }
 
     /**
      * Dispatches one chunk to the registered hook. Returns {@code FALLBACK} -- never throws --
-     * when no module is registered or the module itself fails, so the caller can run vanilla.
+     * when no module is registered or the module itself fails, so the caller runs vanilla.
      */
-    public HookResult generateChunk(long seed, int chunkX, int chunkZ, ChunkAccess into) {
+    public HookResult generateChunk(long seed, int chunkX, int chunkZ, ChunkTarget target) {
         ChunkGenerationHook hook = this.chunkHook;
         if (hook == null) {
             return HookResult.fallback(HookResult.FallbackReason.NO_MODULE);
         }
         try {
-            return hook.generate(seed, chunkX, chunkZ, into);
+            return hook.generate(seed, chunkX, chunkZ, target);
         } catch (Throwable t) {
             LOGGER.error(TAG + "module threw generating chunk (" + chunkX + ", " + chunkZ
                     + ") -- falling back to vanilla", t);
@@ -97,14 +104,11 @@ public final class VertexEngine {
 
     private void loadModules() {
         if (!Files.isDirectory(this.moduleDir)) {
-            LOGGER.info(TAG + "No module directory at " + this.moduleDir + " -- nothing to load");
             return;
         }
-        LOGGER.info(TAG + "Module directory: " + this.moduleDir);
-
         List<URL> jars = new ArrayList<>();
         try (Stream<Path> entries = Files.list(this.moduleDir)) {
-            for (Path entry : entries.filter(p -> p.toString().endsWith(".jar")).toList()) {
+            for (Path entry : entries.filter(p -> p.toString().endsWith(".jar")).sorted().toList()) {
                 jars.add(entry.toUri().toURL());
             }
         } catch (IOException e) {
@@ -112,20 +116,51 @@ public final class VertexEngine {
             return;
         }
         if (jars.isEmpty()) {
-            LOGGER.info(TAG + "No module jars found");
             return;
         }
+        LOGGER.info(TAG + VertexBrand.NAME + " Engine " + VertexBrand.ENGINE_VERSION
+                + " (" + VertexBrand.lineage() + ")");
+        LOGGER.info(TAG + "Module directory: " + this.moduleDir);
 
         ClassLoader loader = new URLClassLoader("vertex-modules", jars.toArray(new URL[0]),
                 VertexEngine.class.getClassLoader());
         for (VertexModule module : ServiceLoader.load(VertexModule.class, loader)) {
             try {
-                module.onEnable(this);
+                module.onEnable(new Context(module));
                 this.modules.add(module);
                 LOGGER.info(TAG + "  " + module.id() + " " + module.version() + " -- ACTIVE");
             } catch (Throwable t) {
                 LOGGER.error(TAG + "  " + module.id() + " failed to enable -- skipped", t);
             }
+        }
+    }
+
+    /** Per-module view of the engine, so a module never holds the registry itself. */
+    private final class Context implements ModuleContext {
+
+        private final VertexModule module;
+
+        Context(VertexModule module) {
+            this.module = module;
+        }
+
+        @Override
+        public void registerChunkGeneration(ChunkGenerationHook hook) {
+            if (VertexEngine.this.chunkHook != null) {
+                throw new IllegalStateException("chunk generation is already registered by another module");
+            }
+            VertexEngine.this.chunkHook = hook;
+        }
+
+        @Override
+        public Path dataDirectory() {
+            Path dir = VertexEngine.this.moduleDir.resolve(this.module.id());
+            try {
+                Files.createDirectories(dir);
+            } catch (IOException e) {
+                throw new IllegalStateException("could not create data directory " + dir, e);
+            }
+            return dir;
         }
     }
 }

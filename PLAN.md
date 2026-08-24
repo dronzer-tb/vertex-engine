@@ -1,45 +1,76 @@
 # Vertex Engine — build plan
 
-Fork of Folia that carries the Vertex Engine: a module/hook registry Rust-backed subsystems
-(starting with Oxide chunk generation) plug into.
+Fork of Folia carrying the Vertex Engine: a module and hook registry that Rust-backed subsystems
+plug into. The engine ships no generation of its own.
 
 - Fork base: Folia `de00a94`, `mcVersion=26.1.2`, `paperRef=6bac3c95`
 - Branch: `vertex`, upstream remote `PaperMC/Folia`
-- Working copy: `~/Assets (ds)/VERTEX/vertex`
 - Toolchain: Java 25, paperweight-patcher `2.0.0-beta.21`
+
+## The guarantee
+
+**A Vertex server with no modules installed behaves exactly like stock Folia.**
+
+The engine registers nothing, every dispatch returns `FALLBACK`, and vanilla generation runs
+untouched. Boot logs a single line naming the module directory it checked. Install
+`vertex/modules/oxide.jar` and it activates; delete it and the server is stock again on the next
+restart. No config flag, no migration, nothing to undo.
+
+That is the default path, not a degraded one, and every failure route inside the engine leads
+back to it: no module, module threw, module refused the chunk.
+
+## Repository split
+
+| Repo | Holds |
+| ---- | ----- |
+| `dronzer-tb/vertex` | the Folia fork, the engine, and `vertex-engine-api` |
+| `dronzer-tb/oxide` | Oxide, depending only on the published `vertex-engine-api` artifact |
+
+Oxide never compiles against the fork or against Minecraft. `vertex-engine-api` is a plain Java
+subproject containing no Minecraft types:
+
+```
+vertex-engine-api/src/main/java/dev/vertex/engine/api/
+  VertexModule.java          module contract, discovered via ServiceLoader
+  ModuleContext.java         what a module gets at enable time
+  ChunkGenerationHook.java   the SPI Oxide implements
+  ChunkTarget.java           neutral write surface: string palettes + bulk index arrays
+  HookResult.java            SUCCESS / FALLBACK + reasons
+```
+
+`ChunkTarget` is why this works. A module names blocks as strings and hands over bulk index
+arrays; the engine performs the actual chunk write. Modules stay independent of server
+internals, and the one performance-critical conversion lives in a single place where it can be
+optimised for every module at once — which is precisely where the previous attempt lost its
+time.
 
 ## Decisions taken
 
 **Module names stay `folia-server` / `folia-api`.** Renaming means rewriting both
 `build.gradle.kts.patch` files and every path in a 20k-line patch stack, for no functional gain.
-Branding happens at `getServerModName()`, which is where users actually see it. Revisit only if
-the published Maven coordinates need it.
+Branding happens at `getServerModName()`, which is where users actually see it.
 
-**Rebase model is git, not paperweight.** Vertex forks Folia's *repository* and keeps Folia's
-`upstreams.paper` block untouched. Our patches append to Folia's existing stack as `0009+`.
-Pulling a new Folia release is `git merge upstream/main`. Paperweight's generic-upstream support
-is not used, so there is nothing extra to verify in the build config.
+**Rebase model is git, not paperweight.** Vertex forks Folia's *repository* and leaves Folia's
+`upstreams.paper` block untouched. Our patches append to Folia's stack as `0009+`. A new Folia
+release is `git merge upstream/main`.
 
 **Build-time patch first, runtime ASM second.** The original intent was to install every NMS hook
-at runtime. With a fork already in hand, the first working version is cheaper as a build-time
-patch — one call site, no descriptor verification, no transformer. Phase 4 converts it to ASM
-once there is something working to convert; that buys jar-swap iteration instead of a 10-minute
-`applyPatches` rebuild, at the cost of a verification layer. Keep or drop that phase on its own
-merits; phases 1-3 do not depend on it.
+at runtime. With a fork in hand the first working version is cheaper as a build-time patch — one
+call site, no descriptor verification, no transformer. Phase 6 converts it once there is
+something working to convert. Phases 1-5 do not depend on it.
 
-**Engine sources live in `folia-server/src/main/java/dev/vertex/engine/`** as real files, not
-patch content — new classes touch no upstream code, so a patch would only add merge friction.
-Placement must be confirmed against paperweight on the first `applyPatches`; see Phase 1.
+**`VertexEngine` holds no Minecraft types.** The chunk conversion happens at the patched call
+site, so the fork's contact with upstream code is one method, and the engine itself is plain
+Java that compiles and tests without the server.
 
 ## Phase 1 — build the fork unchanged  *(blocking, network required)*
 
-Prove the toolchain before adding anything.
-
 1. `./gradlew applyPatches` — resolves Paper `6bac3c95`, applies Folia's 16 patches.
-2. Confirm `folia-server/src/main/java/dev/vertex/engine/*.java` is compiled into the server
-   jar. If paperweight does not pick up that source set in a patcher project, move the engine
-   into a new patch `0009-Vertex-Engine.patch` and record it here.
-3. `./gradlew createMojmapPaperclipJar` — runs on GitHub Actions, not locally.
+2. Add `implementation(project(":vertex-engine-api"))` to `folia-server/build.gradle.kts.patch`.
+3. Confirm paperweight compiles `folia-server/src/main/java/` in a patcher project. If it does
+   not, the engine moves into `0009-Vertex-Engine.patch` — same Java either way. Record the
+   answer here.
+4. `./gradlew createMojmapPaperclipJar` — on GitHub Actions, not locally.
 
 Exit: unmodified Folia jar boots.
 
@@ -48,62 +79,71 @@ Exit: unmodified Folia jar boots.
 Patch `MinecraftServer#getServerModName` to return `Vertex`. Reaches `/version`, the server-list
 ping mod string, and crash report headers from one place.
 
-Boot line becomes:
-
 ```
 [ServerMain/INFO]: [bootstrap] Loading Vertex 26.1.2-R0.1-SNAPSHOT (Folia 26.1.2, Paper 6bac3c9) for Minecraft 26.1.2
 ```
 
-Exit: `/version` reports Vertex; a crash report names Vertex and its Folia/Paper lineage.
-
 ## Phase 3 — engine boot + module loading
 
-Patch one line into `DedicatedServer#initServer`, before `loadPlugins()`:
+One line patched into `DedicatedServer#initServer`, before `loadPlugins()`:
 
 ```java
 dev.vertex.engine.VertexEngine.boot(this.getServerDirectory().toFile());
 ```
 
-Before `loadPlugins()` because a chunk-generation hook must be registered before any world
-loads, and the plugin system does not exist yet at that point.
+Before `loadPlugins()` because a chunk-generation hook must exist before any world loads, and the
+plugin system does not exist yet at that point.
 
-`VertexEngine` (written, 215 lines across 5 files) loads `vertex/modules/*.jar` through
-`ServiceLoader` on a child classloader and logs:
+Empty server:
+
+```
+[Server thread/INFO]: [VertexEngine] Vertex Engine 0.1.0 -- no modules in /srv/mc/vertex/modules, running stock generation
+```
+
+With Oxide installed:
 
 ```
 [Server thread/INFO]: [VertexEngine] Vertex Engine 0.1.0 (Folia 26.1.2, Paper 6bac3c9)
 [Server thread/INFO]: [VertexEngine] Module directory: /srv/mc/vertex/modules
 [Server thread/INFO]: [VertexEngine]   oxide 0.1.0 -- ACTIVE
-[Server thread/INFO]: [VertexEngine] Ready -- 1 module(s), chunk-generation hook active
+[Server thread/INFO]: [VertexEngine] Ready -- 1 module(s), chunk generation hooked
 ```
 
-Exit: a no-op test module loads and appears in the log.
+Exit: a no-op test module loads and appears in the log; removing it restores the quiet line.
 
 ## Phase 4 — chunk generation hook
 
-Patch `NoiseBasedChunkGenerator#fillFromNoise`, the same single call site the previous Paper-based
-attempt used. Verified this session: `NoiseBasedChunkGenerator` appears in **none** of Folia's 16
+Patch `NoiseBasedChunkGenerator#fillFromNoise`, the same single call site the previous
+Paper-based attempt used. Verified: `NoiseBasedChunkGenerator` appears in **none** of Folia's 16
 patches, so there is no upstream conflict.
 
 ```java
-HookResult result = VertexEngine.get().generateChunk(seed, chunkPos.x, chunkPos.z, chunk);
+HookResult result = VertexEngine.get().generateChunk(seed, chunkPos.x, chunkPos.z, target);
 if (result.status() == HookResult.Status.SUCCESS) {
     return;  // skip vanilla terrain entirely
 }
 // FALLBACK falls through to this.doFill(...)
 ```
 
-Exit: a module that fills a chunk with stone visibly overrides vanilla terrain; disabling the
-module returns vanilla terrain with no restart-time errors.
+Also written here: the `ChunkAccess` implementation of `ChunkTarget`. Deferred to this phase
+deliberately — it needs the real 26.1.2 API, which does not exist on disk until Phase 1 runs.
+Bulk section writes, not per-block `setBlockState`.
+
+Exit: a module filling a chunk with stone visibly overrides vanilla terrain; removing it returns
+vanilla terrain with no restart-time errors.
 
 ## Phase 5 — Oxide as the first module
 
-Oxide's `nms` branch implements `ChunkGenerationHook` and ships `vertex/modules/oxide.jar`.
-Oxide's `plugin` branch stays a plain Bukkit `ChunkGenerator` for unmodified Folia. Both consume
-the same `oxide-ffi` cdylib.
+In the Oxide repo: implement `ChunkGenerationHook`, declare it in
+`META-INF/services/dev.vertex.engine.api.VertexModule`, ship `vertex/modules/oxide.jar`. Oxide's
+existing Bukkit `ChunkGenerator` path stays for unmodified Folia. Both consume the same
+`oxide-ffi` cdylib.
 
-Open before starting: does one Oxide jar detect the engine at runtime and serve both, or do the
-two branches ship separately? This decides the FFI/service boundary and should be settled first.
+## Phase 6 — runtime ASM  *(optional)*
+
+Convert the Phase 4 call site to a `ClassFileTransformer`. Buys jar-swap iteration instead of a
+10-minute `applyPatches` rebuild; costs a descriptor-verification layer that must refuse to
+install on mismatch rather than rewrite a shape it did not expect.
 
 ## Carried forward from the previous attempt
 
@@ -123,6 +163,6 @@ The previous attempt reached `Active ✔` on a live server and still lost to van
 `rust=42-52ms` per chunk against Paper's own 2-15ms, with `12ms` measured in isolation. The gap
 was the boundary — batching, FFI, and per-block `ChunkDataMapper.apply` of 98,304 bytes.
 
-On Folia this is worse, not better: that cost lands on the owning region's tick loop, stalling
-the players in it. **Settle the transport design before Phase 5**, and measure the boundary
-separately from generation from the first working chunk.
+On Folia this is worse, not better: the cost lands on the owning region's tick loop, stalling the
+players in it. `ChunkTarget`'s bulk shape exists to make the fast path the only path. Measure the
+boundary separately from generation from the first working chunk.

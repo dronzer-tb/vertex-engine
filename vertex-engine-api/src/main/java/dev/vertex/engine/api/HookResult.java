@@ -1,7 +1,7 @@
-package dev.vertex.engine;
+package dev.vertex.engine.api;
 
 /**
- * Outcome of a {@link ChunkGenerationHook} call. {@code FALLBACK} means the caller must run
+ * Outcome of a {@link ChunkGenerationHook} call. {@code FALLBACK} means the server must run
  * vanilla generation for this chunk; the reason is for logging only and never changes dispatch.
  */
 public record HookResult(Status status, FallbackReason reason) {
