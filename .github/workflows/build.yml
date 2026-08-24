@@ -4,6 +4,7 @@ on:
   push:
     branches: [ "**" ]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -26,3 +27,17 @@ jobs:
         run: ./gradlew applyAllPatches --stacktrace
       - name: Build
         run: ./gradlew build
+      - name: Build Paperclip Jar
+        run: ./gradlew createMojmapPaperclipJar --stacktrace
+      - name: Upload Vertex Server Jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: vertex-server
+          path: folia-server/build/libs/*paperclip*.jar
+          if-no-files-found: error
+      - name: Upload Vertex Engine API
+        uses: actions/upload-artifact@v4
+        with:
+          name: vertex-engine-api
+          path: vertex-engine-api/build/libs/*.jar
+          if-no-files-found: error
