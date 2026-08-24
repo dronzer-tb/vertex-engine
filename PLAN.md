@@ -63,36 +63,40 @@ something working to convert. Phases 1-5 do not depend on it.
 site, so the fork's contact with upstream code is one method, and the engine itself is plain
 Java that compiles and tests without the server.
 
-## Phase 1 — build the fork unchanged  *(blocking, network required)*
+## Phase 1 — build the fork unchanged  *(done)*
 
-1. `./gradlew applyPatches` — resolves Paper `6bac3c95`, applies Folia's 16 patches.
-2. Add `implementation(project(":vertex-engine-api"))` to `folia-server/build.gradle.kts.patch`.
-3. Confirm paperweight compiles `folia-server/src/main/java/` in a patcher project. If it does
-   not, the engine moves into `0009-Vertex-Engine.patch` — same Java either way. Record the
-   answer here.
-4. `./gradlew createMojmapPaperclipJar` — on GitHub Actions, not locally.
+`./gradlew applyAllPatches` (not `applyPatches` — ambiguous in this project) resolves Paper
+`6bac3c95`, decompiles Minecraft 26.1.2 and applies Folia's patches. ~15 min cold, cached after.
+Needs a git identity; there is none set globally on this machine, so it runs with
+`GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_*` in the environment.
 
-Exit: unmodified Folia jar boots.
+Answered: **paperweight does compile `folia-server/src/main/java/`.** The build patch adds
+`../paper-server/src/main/java` as an extra source dir, it does not replace the project's own —
+so the engine lives in the fork's normal source tree and only the two call sites are patches.
+`implementation(project(":vertex-engine-api"))` added to `folia-server/build.gradle.kts.patch`.
 
-## Phase 2 — brand
+`:folia-server:compileJava` succeeds with the engine in place.
 
-Patch `MinecraftServer#getServerModName` to return `Vertex`. Reaches `/version`, the server-list
-ping mod string, and crash report headers from one place.
+## Phase 2 — brand  *(done, no patch needed)*
 
-```
-[ServerMain/INFO]: [bootstrap] Loading Vertex 26.1.2-R0.1-SNAPSHOT (Folia 26.1.2, Paper 6bac3c9) for Minecraft 26.1.2
-```
+`MinecraftServer#getServerModName` already returns `ServerBuildInfo.buildInfo().brandName()`,
+which reads the `Brand-Name` manifest attribute. Setting it in
+`folia-server/build.gradle.kts.patch` reaches `/version`, the ping mod string and crash headers
+without touching Minecraft source at all.
 
-## Phase 3 — engine boot + module loading
+`Brand-Id` deliberately stays `papermc:folia`. Plugins detect Folia through brand-id
+compatibility, and a fork that renames it stops looking like Folia to every regionised-threading
+plugin that checks.
 
-One line patched into `DedicatedServer#initServer`, before `loadPlugins()`:
+## Phase 3 — engine boot + module loading  *(done)*
+
+One line patched into `DedicatedServer#initServer`, before `loadPlugins()`, because a
+chunk-generation hook must exist before any world loads and the plugin system does not exist yet
+at that point:
 
 ```java
 dev.vertex.engine.VertexEngine.boot(this.getServerDirectory().toFile());
 ```
-
-Before `loadPlugins()` because a chunk-generation hook must exist before any world loads, and the
-plugin system does not exist yet at that point.
 
 Empty server:
 
@@ -109,35 +113,68 @@ With Oxide installed:
 [Server thread/INFO]: [VertexEngine] Ready -- 1 module(s), chunk generation hooked
 ```
 
-Exit: a no-op test module loads and appears in the log; removing it restores the quiet line.
+Not yet run on a live server — that is the next thing to do.
 
-## Phase 4 — chunk generation hook
+## Phase 4 — chunk generation hook  *(done, one gap)*
 
-Patch `NoiseBasedChunkGenerator#fillFromNoise`, the same single call site the previous
-Paper-based attempt used. Verified: `NoiseBasedChunkGenerator` appears in **none** of Folia's 16
-patches, so there is no upstream conflict.
+**Changed from the plan.** Not `NoiseBasedChunkGenerator#fillFromNoise` — that method's four
+arguments carry no `ServerLevel`, and without one there is no dimension id and no level seed, so
+a module cannot be told which generator to answer with. The hook went one frame up into
+`ChunkStatusTasks#generateNoise`, which has both:
 
 ```java
-HookResult result = VertexEngine.get().generateChunk(seed, chunkPos.x, chunkPos.z, target);
-if (result.status() == HookResult.Status.SUCCESS) {
-    return;  // skip vanilla terrain entirely
+ServerLevel level = context.level();
+if (dev.vertex.engine.VertexChunkBridge.generateNoise(level, context.generator(), chunk)) {
+    return CompletableFuture.completedFuture(chunk);
 }
-// FALLBACK falls through to this.doFill(...)
 ```
 
-Also written here: the `ChunkAccess` implementation of `ChunkTarget`. Deferred to this phase
-deliberately — it needs the real 26.1.2 API, which does not exist on disk until Phase 1 runs.
-Bulk section writes, not per-block `setBlockState`.
+Better placement for a second reason: `generateSurface` and `generateCarvers` are the next two
+methods in the same file, so the remaining stages hook the same way.
 
-Exit: a module filling a chunk with stone visibly overrides vanilla terrain; removing it returns
-vanilla terrain with no restart-time errors.
+`0009-Vertex-Engine-chunk-generation-hook.patch` is 11 added lines across two files. Everything
+else lives in `folia-server/src/main/java/dev/vertex/engine/`:
 
-## Phase 5 — Oxide as the first module
+- `VertexChunkBridge` — the call site's whole body. Skips flat and debug generators, builds the
+  `ChunkRequest`, catches everything, primes `OCEAN_FLOOR_WG` and `WORLD_SURFACE_WG` after a
+  module writes, since surface rules, carvers and structure placement all read them.
+- `ChunkAccessTarget` — palettes resolved once per chunk, then a flat array walk per section
+  under one `acquire()`/`release()`. Biomes go in through `fillBiomesFromNoise` with a resolver
+  over the module's array.
 
-In the Oxide repo: implement `ChunkGenerationHook`, declare it in
-`META-INF/services/dev.vertex.engine.api.VertexModule`, ship `vertex/modules/oxide.jar`. Oxide's
-existing Bukkit `ChunkGenerator` path stays for unmodified Folia. Both consume the same
-`oxide-ffi` cdylib.
+26.x renames worth remembering: `ResourceLocation` is `Identifier`, `ResourceKey#location()` is
+`identifier()`, `ChunkPos` is a record so it is `x()`/`z()`.
+
+**The gap:** this hooks the noise stage only. Surface rules and carvers still run afterwards as
+separate chunk statuses, on top of what the module wrote — and Oxide's Rust side already applies
+its own surface pass and carvers, so they currently double-apply. Either those two stages get
+hooked as well, or the module returns noise-only terrain. Hooking them is the right answer and
+the file is already open.
+
+## Phase 5 — Oxide as the first module  *(done, untested on a server)*
+
+Settled: **one jar, two entry points.** In `plugins/` Bukkit loads `OxidePlugin`; in
+`vertex/modules/` the engine loads `OxideVertexModule` through `ServiceLoader`. Nothing is
+duplicated and there is no second build.
+
+- `GeneratorService` lost its `JavaPlugin` dependency to a four-method `GeneratorHost`. A module
+  is constructed before the plugin system exists, so it has neither `config.yml` nor a plugin
+  logger; it reads a plain `.properties` file out of `vertex/oxide/`.
+- `OxideChunkHook` writes blocks *and* biomes from one generation call. The Bukkit path cannot:
+  a `ChunkGenerator` has no way to write the biome grid, so it throws the biome array away and
+  answers biomes again per position through a `BiomeProvider`.
+- A jar in both places still generates once — `OxidePlugin#getDefaultWorldGenerator` returns
+  `null` when `Vertex.isChunkGenerationHooked()`. That check goes through the engine API, not a
+  static of Oxide's own: the two halves load under different class loaders, so only classes on
+  the shared parent are the same class to both.
+
+`dev.vertex:vertex-engine-api:0.1.0` is what Oxide compiles against, `compileOnly`. Published to
+GitHub Packages by this repo's CI on pushes to `vertex`, and to `~/.m2` with
+`./gradlew :vertex-engine-api:publishToMavenLocal` when working on both at once.
+
+**Needs a one-time account action:** Oxide's CI cannot read another private repo's packages with
+the default `GITHUB_TOKEN`. Add a PAT with `read:packages` as `VERTEX_PACKAGES_TOKEN` in the
+Oxide repo's secrets.
 
 ## Phase 6 — runtime ASM  *(optional)*
 
