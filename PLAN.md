@@ -77,16 +77,20 @@ so the engine lives in the fork's normal source tree and only the two call sites
 
 `:folia-server:compileJava` succeeds with the engine in place.
 
-## Phase 2 — brand  *(done, no patch needed)*
+## Phase 2 — brand  *(done: deliberately nothing)*
 
-`MinecraftServer#getServerModName` already returns `ServerBuildInfo.buildInfo().brandName()`,
-which reads the `Brand-Name` manifest attribute. Setting it in
-`folia-server/build.gradle.kts.patch` reaches `/version`, the ping mod string and crash headers
-without touching Minecraft source at all.
+**The server stays Folia everywhere a name is written.** The jar is `folia-*.jar`, the manifest
+says `Implementation-Title: Folia`, `Brand-Name: Folia`, `Brand-Id: papermc:folia`, and
+`MinecraftServer#getServerModName` therefore keeps returning `Folia` to `/version`, the
+server-list ping and crash reports.
 
-`Brand-Id` deliberately stays `papermc:folia`. Plugins detect Folia through brand-id
-compatibility, and a fork that renames it stops looking like Folia to every regionised-threading
-plugin that checks.
+That is the whole point rather than an omission. A Folia fork that renames its brand stops
+looking like Folia to every plugin that detects regionised threading, and stops matching every
+piece of documentation and support advice a server owner has. Vertex is an engine running inside
+Folia, not a replacement for it.
+
+Vertex appears in exactly one place: the `[VertexEngine]` lines the engine logs at boot. Nothing
+else is renamed.
 
 ## Phase 3 — engine boot + module loading  *(done)*
 

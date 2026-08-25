@@ -1,8 +1,13 @@
 package dev.vertex.engine;
 
 /**
- * Identity strings for the Vertex fork. Referenced by the brand patch (which redirects
- * {@code MinecraftServer#getServerModName}) and by the boot banner.
+ * Identity strings for the engine's own log lines, and nothing else.
+ *
+ * The server does not rename itself. The jar, the manifest brand and getServerModName all stay
+ * Folia, because a Folia fork that renames its brand stops looking like Folia to every plugin
+ * that detects regionised threading. Vertex is an engine running inside Folia.
+ *
+ * Referenced only by the engine's boot banner. There is no brand patch.
  */
 public final class VertexBrand {
 
