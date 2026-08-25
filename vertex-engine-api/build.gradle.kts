@@ -1,0 +1,47 @@
+plugins {
+    `java-library`
+    `maven-publish`
+}
+
+group = "dev.vertex"
+// Independent of both the Minecraft version and VertexBrand.ENGINE_VERSION: the module API is
+// its own contract, and which Folia the engine is built on does not change it.
+//
+// SNAPSHOT while the API is still moving. GitHub Packages refuses to overwrite a release
+// version -- a second publish of 0.1.0 is a 409 -- so a fixed version during development means
+// modules silently compile against whichever build happened to land first.
+version = "0.1.0-SNAPSHOT"
+
+description = "Compile-time API for Vertex Engine modules. Contains no Minecraft types."
+
+java {
+    withSourcesJar()
+}
+
+publishing {
+    // Oxide and any other module compile against this artifact, and only against this artifact.
+    // GitHub Packages rather than repo.papermc.io: this is not a Paper artifact, and both
+    // consumers are in the same account.
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/dronzer-tb/vertex-engine")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR")
+                password = System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+            artifactId = "vertex-engine-api"
+        }
+    }
+}
+
+dependencies {
+    // The root build adds this without a version, taking it from a BOM the Folia subprojects
+    // declare and this one does not. Pinned here to the same version Paper's API uses.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.0.3")
+}

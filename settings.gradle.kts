@@ -14,6 +14,7 @@ rootProject.name = "folia"
 
 include("folia-api")
 include("folia-server")
+include("vertex-engine-api")
 include("folia-checkstyle")
 
 gradle.lifecycle.beforeProject {
