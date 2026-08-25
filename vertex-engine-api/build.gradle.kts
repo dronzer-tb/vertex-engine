@@ -4,9 +4,13 @@ plugins {
 }
 
 group = "dev.vertex"
-// Tracks VertexBrand.ENGINE_VERSION, not the Minecraft version: the module API is
-// deliberately independent of which Folia the engine is built on.
-version = "0.1.0"
+// Independent of both the Minecraft version and VertexBrand.ENGINE_VERSION: the module API is
+// its own contract, and which Folia the engine is built on does not change it.
+//
+// SNAPSHOT while the API is still moving. GitHub Packages refuses to overwrite a release
+// version -- a second publish of 0.1.0 is a 409 -- so a fixed version during development means
+// modules silently compile against whichever build happened to land first.
+version = "0.1.0-SNAPSHOT"
 
 description = "Compile-time API for Vertex Engine modules. Contains no Minecraft types."
 
