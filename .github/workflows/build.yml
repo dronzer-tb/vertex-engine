@@ -32,7 +32,7 @@ jobs:
       - name: Build
         run: ./gradlew build
       - name: Build Paperclip Jar
-        run: ./gradlew createMojmapPaperclipJar --stacktrace
+        run: ./gradlew :folia-server:createPaperclipJar --stacktrace
       - name: Upload Vertex Server Jar
         uses: actions/upload-artifact@v4
         with:
