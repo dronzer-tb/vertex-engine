@@ -2,6 +2,7 @@ package dev.vertex.engine;
 
 import com.mojang.logging.LogUtils;
 import dev.vertex.engine.api.ChunkRequest;
+import dev.vertex.engine.api.ChunkStage;
 import dev.vertex.engine.api.HookResult;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -74,7 +75,32 @@ public final class VertexChunkBridge {
             return false;
         }
 
+        chunk.vertexGeneratedTerrain = true;
         Heightmap.primeHeightmaps(chunk, WORLDGEN_HEIGHTMAPS);
         return true;
+    }
+
+    /**
+     * Whether the server must skip its own surface pass for this chunk.
+     *
+     * <p>Both conditions matter. The module has to have said it produces surfaces at all, and
+     * this particular chunk has to be one it generated -- a chunk that fell back is vanilla noise
+     * and needs vanilla's surface rules, or it stays bare stone to the sky.
+     */
+    public static boolean skipSurface(final ChunkAccess chunk) {
+        return ownsStageFor(chunk, ChunkStage.SURFACE);
+    }
+
+    /** Whether the server must skip its own carvers for this chunk. See {@link #skipSurface}. */
+    public static boolean skipCarvers(final ChunkAccess chunk) {
+        return ownsStageFor(chunk, ChunkStage.CARVERS);
+    }
+
+    private static boolean ownsStageFor(final ChunkAccess chunk, final ChunkStage stage) {
+        if (!chunk.vertexGeneratedTerrain) {
+            return false;
+        }
+        VertexEngine engine = VertexEngine.get();
+        return engine != null && engine.ownsStage(stage);
     }
 }

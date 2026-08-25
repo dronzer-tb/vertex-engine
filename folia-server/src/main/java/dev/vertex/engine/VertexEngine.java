@@ -3,6 +3,7 @@ package dev.vertex.engine;
 import com.mojang.logging.LogUtils;
 import dev.vertex.engine.api.ChunkGenerationHook;
 import dev.vertex.engine.api.ChunkRequest;
+import dev.vertex.engine.api.ChunkStage;
 import dev.vertex.engine.api.ChunkTarget;
 import dev.vertex.engine.api.HookResult;
 import dev.vertex.engine.api.ModuleContext;
@@ -18,7 +19,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.EnumSet;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -48,6 +51,7 @@ public final class VertexEngine {
     private final Path moduleDir;
     private final List<VertexModule> modules = new ArrayList<>();
     private volatile ChunkGenerationHook chunkHook;
+    private volatile Set<ChunkStage> ownedStages = EnumSet.noneOf(ChunkStage.class);
 
     private VertexEngine(Path moduleDir) {
         this.moduleDir = moduleDir;
@@ -64,12 +68,26 @@ public final class VertexEngine {
     }
 
     /**
+     * Whether the registered module's output already includes {@code stage}, so the server must
+     * not run its own. Only meaningful for a chunk the module actually generated -- see
+     * {@link dev.vertex.engine.api.ChunkStage}.
+     */
+    public boolean ownsStage(ChunkStage stage) {
+        return this.ownedStages.contains(stage);
+    }
+
+    /**
      * Entry point patched into {@code DedicatedServer#initServer}. A second call is ignored
      * rather than rebuilding the registry underneath a running server.
      */
     public static void boot(File serverDirectory) {
         if (instance != null) {
             return;
+        }
+        if (VertexChunkTimings.enabled()) {
+            LOGGER.info(TAG + "chunk generation timings are on (-Dvertex.timings). Numbers are"
+                    + " measured at the chunk status boundary, so they are comparable across a"
+                    + " stock server, a Bukkit generator and a module.");
         }
         VertexEngine engine = new VertexEngine(serverDirectory.toPath().resolve("vertex").resolve("modules"));
         engine.loadModules();
@@ -83,7 +101,9 @@ public final class VertexEngine {
             return;
         }
         LOGGER.info(TAG + "Ready -- " + engine.modules.size() + " module(s), "
-                + (engine.hasChunkGeneration() ? "chunk generation" : "no chunk generation") + " hooked");
+                + (engine.hasChunkGeneration()
+                        ? "generating " + engine.ownedStages
+                        : "no chunk generation") + " hooked");
     }
 
     /**
@@ -148,10 +168,13 @@ public final class VertexEngine {
         }
 
         @Override
-        public void registerChunkGeneration(ChunkGenerationHook hook) {
+        public void registerChunkGeneration(ChunkGenerationHook hook, Set<ChunkStage> stages) {
             if (VertexEngine.this.chunkHook != null) {
                 throw new IllegalStateException("chunk generation is already registered by another module");
             }
+            EnumSet<ChunkStage> owned = EnumSet.of(ChunkStage.NOISE);
+            owned.addAll(stages);
+            VertexEngine.this.ownedStages = owned;
             VertexEngine.this.chunkHook = hook;
             // Visible to Bukkit plugins too, which load later under a different class loader
             // and need to know the server's own terrain generation is no longer running.

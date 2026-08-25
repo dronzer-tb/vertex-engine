@@ -3,9 +3,17 @@ From: dronzer-tb <36neelansh@gmail.com>
 Date: Tue, 25 Aug 2026 05:16:54 +0530
 Subject: [PATCH] Vertex Engine chunk generation hook
 
-Boots the engine before the plugin system, and offers each chunk to a
-registered module ahead of the server's own noise pass. With no modules
-installed neither call does anything and generation is unchanged.
+Boots the engine before the plugin system, offers each chunk to a
+registered module ahead of the server's own noise pass, and skips the
+surface and carver stages for chunks a module already surfaced and
+carved.
+
+Also times all three stages when -Dvertex.timings is set, at the status
+boundary so the numbers mean the same thing for stock generation, for a
+Bukkit ChunkGenerator and for a module.
+
+With no modules installed none of it does anything and generation is
+unchanged.
 
 diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
 index 5f89d29eaeeb4c63b8b9e034d440204f518efec2..f7e6d83071fde76b331726d24907c605f0061770 100644
@@ -24,19 +32,81 @@ index 5f89d29eaeeb4c63b8b9e034d440204f518efec2..f7e6d83071fde76b331726d24907c605
          // CraftBukkit start
          this.server.loadPlugins();
          this.server.enablePlugins(org.bukkit.plugin.PluginLoadOrder.STARTUP);
+diff --git a/net/minecraft/world/level/chunk/ChunkAccess.java b/net/minecraft/world/level/chunk/ChunkAccess.java
+index c73b9871faa87493e081cb54e1bf1dce487359c6..6c71ed8121c0826bd2f5da20391329bd9d7af4d7 100644
+--- a/net/minecraft/world/level/chunk/ChunkAccess.java
++++ b/net/minecraft/world/level/chunk/ChunkAccess.java
+@@ -79,6 +79,13 @@ public abstract class ChunkAccess implements LightChunk, StructureAccess, BiomeM
+     public final Map<BlockPos, BlockEntity> blockEntities = new Object2ObjectOpenHashMap<>();
+     protected final LevelHeightAccessor levelHeightAccessor;
+     protected final LevelChunkSection[] sections;
++    // Vertex start - whether a module, not the server, generated this chunk's terrain
++    // Read by the surface and carver stages, which must run vanilla's version for a chunk that
++    // fell back and skip it for one a module already surfaced and carved. A field on the chunk
++    // rather than a map in the engine because the stages run later, on another call, and a map
++    // keyed by position leaks every chunk whose generation is abandoned part-way.
++    public boolean vertexGeneratedTerrain;
++    // Vertex end - whether a module, not the server, generated this chunk's terrain
+     // CraftBukkit start - SPIGOT-6814: move to ChunkAccess to account for 1.17 to 1.18 chunk upgrading.
+     private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
+     public org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer persistentDataContainer = new org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer(ChunkAccess.DATA_TYPE_REGISTRY);
 diff --git a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
-index 6eb1a3a83c5bae8935c042396d676f7a3450e135..95006cb28cac734a45ab101d312c1df0f551ea40 100644
+index 6eb1a3a83c5bae8935c042396d676f7a3450e135..db9cabde5443ce3b7f19e9873cfbfc8eccdd9f79 100644
 --- a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
 +++ b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
-@@ -86,6 +86,11 @@ public class ChunkStatusTasks {
+@@ -86,10 +86,18 @@ public class ChunkStatusTasks {
          final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
      ) {
          ServerLevel level = context.level();
 +        // Vertex start - offer the chunk to a module before the server's own noise pass
++        final long vertexBegunAt = dev.vertex.engine.VertexChunkTimings.begin();
 +        if (dev.vertex.engine.VertexChunkBridge.generateNoise(level, context.generator(), chunk)) {
++            dev.vertex.engine.VertexChunkTimings.recordNoise(vertexBegunAt, true);
 +            return CompletableFuture.completedFuture(chunk);
 +        }
 +        // Vertex end - offer the chunk to a module before the server's own noise pass
          WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
          return context.generator()
              .fillFromNoise(Blender.of(region), level.getChunkSource().randomState(), level.structureManager().forWorldGenRegion(region), chunk)
+             .thenApply(generatedChunk -> {
++                dev.vertex.engine.VertexChunkTimings.recordNoise(vertexBegunAt, false); // Vertex - time the server's own noise pass, which is also where a Bukkit ChunkGenerator runs
+                 if (generatedChunk instanceof ProtoChunk protoChunk) {
+                     BelowZeroRetrogen belowZeroRetrogen = protoChunk.getBelowZeroRetrogen();
+                     if (belowZeroRetrogen != null) {
+@@ -108,8 +116,15 @@ public class ChunkStatusTasks {
+         final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
+     ) {
+         ServerLevel level = context.level();
++        // Vertex start - a module that produces surfaced terrain has already done this
++        if (dev.vertex.engine.VertexChunkBridge.skipSurface(chunk)) {
++            return CompletableFuture.completedFuture(chunk);
++        }
++        final long vertexBegunAt = dev.vertex.engine.VertexChunkTimings.begin();
++        // Vertex end - a module that produces surfaced terrain has already done this
+         WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
+         context.generator().buildSurface(region, level.structureManager().forWorldGenRegion(region), level.getChunkSource().randomState(), chunk);
++        dev.vertex.engine.VertexChunkTimings.recordSurface(vertexBegunAt); // Vertex
+         return CompletableFuture.completedFuture(chunk);
+     }
+ 
+@@ -117,6 +132,12 @@ public class ChunkStatusTasks {
+         final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
+     ) {
+         ServerLevel level = context.level();
++        // Vertex start - a module that produces carved terrain has already done this
++        if (dev.vertex.engine.VertexChunkBridge.skipCarvers(chunk)) {
++            return CompletableFuture.completedFuture(chunk);
++        }
++        final long vertexBegunAt = dev.vertex.engine.VertexChunkTimings.begin();
++        // Vertex end - a module that produces carved terrain has already done this
+         WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
+         if (chunk instanceof ProtoChunk protoChunk) {
+             Blender.addAroundOldChunksCarvingMaskFilter(region, protoChunk);
+@@ -131,6 +152,7 @@ public class ChunkStatusTasks {
+                 level.structureManager().forWorldGenRegion(region),
+                 chunk
+             );
++        dev.vertex.engine.VertexChunkTimings.recordCarvers(vertexBegunAt); // Vertex
+         return CompletableFuture.completedFuture(chunk);
+     }
+ 
