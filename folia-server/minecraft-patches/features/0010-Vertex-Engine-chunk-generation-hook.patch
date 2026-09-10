@@ -16,10 +16,10 @@ With no modules installed none of it does anything and generation is
 unchanged.
 
 diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
-index 5f89d29eaeeb4c63b8b9e034d440204f518efec2..f7e6d83071fde76b331726d24907c605f0061770 100644
+index cd5551c0221ad2a7b5c7d452d8d91ffc9711c3ee..3363cec11e7f92a47ec841b7c448e8783287c53b 100644
 --- a/net/minecraft/server/dedicated/DedicatedServer.java
 +++ b/net/minecraft/server/dedicated/DedicatedServer.java
-@@ -337,6 +337,12 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+@@ -293,6 +293,12 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
              return false;
          }
  
@@ -33,7 +33,7 @@ index 5f89d29eaeeb4c63b8b9e034d440204f518efec2..f7e6d83071fde76b331726d24907c605
          this.server.loadPlugins();
          this.server.enablePlugins(org.bukkit.plugin.PluginLoadOrder.STARTUP);
 diff --git a/net/minecraft/world/level/chunk/ChunkAccess.java b/net/minecraft/world/level/chunk/ChunkAccess.java
-index c73b9871faa87493e081cb54e1bf1dce487359c6..6c71ed8121c0826bd2f5da20391329bd9d7af4d7 100644
+index 28f703204afd834cd50335346ef065670d6b37ad..81182f57ba4f8a0e9a778521794927ff09639141 100644
 --- a/net/minecraft/world/level/chunk/ChunkAccess.java
 +++ b/net/minecraft/world/level/chunk/ChunkAccess.java
 @@ -79,6 +79,13 @@ public abstract class ChunkAccess implements LightChunk, StructureAccess, BiomeM
@@ -51,7 +51,7 @@ index c73b9871faa87493e081cb54e1bf1dce487359c6..6c71ed8121c0826bd2f5da20391329bd
      private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
      public org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer persistentDataContainer = new org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer(ChunkAccess.DATA_TYPE_REGISTRY);
 diff --git a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
-index 6eb1a3a83c5bae8935c042396d676f7a3450e135..44e65eed0e1c195ad1f5281c4b57b929ea02290f 100644
+index 478771c9f01d8674727cffdff90008c3b8608d69..092bf239a1f37307ce254bbe242a9f420846917d 100644
 --- a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
 +++ b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
 @@ -77,6 +77,18 @@ public class ChunkStatusTasks {
