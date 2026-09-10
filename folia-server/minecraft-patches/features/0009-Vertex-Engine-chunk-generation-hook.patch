@@ -51,20 +51,38 @@ index c73b9871faa87493e081cb54e1bf1dce487359c6..6c71ed8121c0826bd2f5da20391329bd
      private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
      public org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer persistentDataContainer = new org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer(ChunkAccess.DATA_TYPE_REGISTRY);
 diff --git a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
-index 6eb1a3a83c5bae8935c042396d676f7a3450e135..db9cabde5443ce3b7f19e9873cfbfc8eccdd9f79 100644
+index 6eb1a3a83c5bae8935c042396d676f7a3450e135..44e65eed0e1c195ad1f5281c4b57b929ea02290f 100644
 --- a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
 +++ b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
-@@ -86,10 +86,18 @@ public class ChunkStatusTasks {
+@@ -77,6 +77,18 @@ public class ChunkStatusTasks {
          final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
      ) {
          ServerLevel level = context.level();
-+        // Vertex start - offer the chunk to a module before the server's own noise pass
++        // Vertex start - generate the whole chunk here, the earliest stage that needs any of it
++        // BIOMES runs before NOISE. A multi-noise module resolves the biome grid and the terrain
++        // in a single pass, so hooking NOISE instead would mean the server had already paid for a
++        // full createBiomes pass -- recomputing exactly the climate samples the module was about
++        // to produce -- before the module ever ran. Generating here and letting NOISE, SURFACE
++        // and CARVERS read what was produced removes that duplicate outright.
 +        final long vertexBegunAt = dev.vertex.engine.VertexChunkTimings.begin();
-+        if (dev.vertex.engine.VertexChunkBridge.generateNoise(level, context.generator(), chunk)) {
++        if (dev.vertex.engine.VertexChunkBridge.generateChunk(level, context.generator(), chunk)) {
 +            dev.vertex.engine.VertexChunkTimings.recordNoise(vertexBegunAt, true);
 +            return CompletableFuture.completedFuture(chunk);
 +        }
-+        // Vertex end - offer the chunk to a module before the server's own noise pass
++        // Vertex end - generate the whole chunk here, the earliest stage that needs any of it
+         WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
+         return context.generator()
+             .createBiomes(level.getChunkSource().randomState(), Blender.of(region), level.structureManager().forWorldGenRegion(region), chunk);
+@@ -86,10 +98,17 @@ public class ChunkStatusTasks {
+         final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
+     ) {
+         ServerLevel level = context.level();
++        // Vertex start - a module already produced this chunk's terrain at the BIOMES stage
++        if (dev.vertex.engine.VertexChunkBridge.skipNoise(chunk)) {
++            return CompletableFuture.completedFuture(chunk);
++        }
++        final long vertexBegunAt = dev.vertex.engine.VertexChunkTimings.begin();
++        // Vertex end - a module already produced this chunk's terrain at the BIOMES stage
          WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
          return context.generator()
              .fillFromNoise(Blender.of(region), level.getChunkSource().randomState(), level.structureManager().forWorldGenRegion(region), chunk)
@@ -73,7 +91,7 @@ index 6eb1a3a83c5bae8935c042396d676f7a3450e135..db9cabde5443ce3b7f19e9873cfbfc8e
                  if (generatedChunk instanceof ProtoChunk protoChunk) {
                      BelowZeroRetrogen belowZeroRetrogen = protoChunk.getBelowZeroRetrogen();
                      if (belowZeroRetrogen != null) {
-@@ -108,8 +116,15 @@ public class ChunkStatusTasks {
+@@ -108,8 +127,15 @@ public class ChunkStatusTasks {
          final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
      ) {
          ServerLevel level = context.level();
@@ -89,7 +107,7 @@ index 6eb1a3a83c5bae8935c042396d676f7a3450e135..db9cabde5443ce3b7f19e9873cfbfc8e
          return CompletableFuture.completedFuture(chunk);
      }
  
-@@ -117,6 +132,12 @@ public class ChunkStatusTasks {
+@@ -117,6 +143,12 @@ public class ChunkStatusTasks {
          final WorldGenContext context, final ChunkStep step, final StaticCache2D<GenerationChunkHolder> chunks, final ChunkAccess chunk
      ) {
          ServerLevel level = context.level();
@@ -102,7 +120,7 @@ index 6eb1a3a83c5bae8935c042396d676f7a3450e135..db9cabde5443ce3b7f19e9873cfbfc8e
          WorldGenRegion region = new WorldGenRegion(level, chunks, step, chunk);
          if (chunk instanceof ProtoChunk protoChunk) {
              Blender.addAroundOldChunksCarvingMaskFilter(region, protoChunk);
-@@ -131,6 +152,7 @@ public class ChunkStatusTasks {
+@@ -131,6 +163,7 @@ public class ChunkStatusTasks {
                  level.structureManager().forWorldGenRegion(region),
                  chunk
              );
