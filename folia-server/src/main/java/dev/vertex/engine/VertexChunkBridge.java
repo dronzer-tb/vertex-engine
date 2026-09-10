@@ -39,10 +39,18 @@ public final class VertexChunkBridge {
     /**
      * Offers one chunk to the registered module.
      *
-     * @return {@code true} when the module generated it and the server must skip its own noise
+     * <p>Called from the {@code BIOMES} status, not {@code NOISE}. That is deliberate and is the
+     * point of the whole arrangement: the server runs {@code BIOMES} before {@code NOISE}, and a
+     * multi-noise module resolves biomes and terrain in a single pass. Hooking the later stage
+     * would mean the server had already paid for a full {@code createBiomes} pass -- recomputing
+     * exactly the climate samples the module was about to produce -- before the module ran at
+     * all. Generating at the earliest stage that needs the data, and letting every later stage
+     * read what was produced, removes that duplicate outright.
+     *
+     * @return {@code true} when the module generated it and the server must skip its own biome
      *         pass; {@code false} in every other case, including every failure
      */
-    public static boolean generateNoise(final ServerLevel level, final ChunkGenerator generator,
+    public static boolean generateChunk(final ServerLevel level, final ChunkGenerator generator,
                                         final ChunkAccess chunk) {
         VertexEngine engine = VertexEngine.get();
         if (engine == null || !engine.hasChunkGeneration()) {
@@ -81,6 +89,17 @@ public final class VertexChunkBridge {
     }
 
     /**
+     * Whether the server must skip its own noise pass for this chunk.
+     *
+     * <p>Always true for a chunk the module generated: producing terrain is what the hook is for,
+     * and {@link ChunkStage#NOISE} is owned unconditionally. The chunk-level check still matters,
+     * because a chunk that fell back must still get vanilla noise.
+     */
+    public static boolean skipNoise(final ChunkAccess chunk) {
+        return ownsStageFor(chunk, ChunkStage.NOISE);
+    }
+
+    /**
      * Whether the server must skip its own surface pass for this chunk.
      *
      * <p>Both conditions matter. The module has to have said it produces surfaces at all, and
@@ -94,6 +113,17 @@ public final class VertexChunkBridge {
     /** Whether the server must skip its own carvers for this chunk. See {@link #skipSurface}. */
     public static boolean skipCarvers(final ChunkAccess chunk) {
         return ownsStageFor(chunk, ChunkStage.CARVERS);
+    }
+
+    /**
+     * Whether the server must skip its own {@code createBiomes} pass for this chunk.
+     *
+     * <p>Same two conditions as {@link #skipSurface}: the module must own the stage, and this
+     * chunk must be one it actually generated. A chunk that fell back to vanilla terrain has
+     * only its default biome grid, so vanilla has to fill it or the chunk comes out all plains.
+     */
+    public static boolean skipBiomes(final ChunkAccess chunk) {
+        return ownsStageFor(chunk, ChunkStage.BIOMES);
     }
 
     private static boolean ownsStageFor(final ChunkAccess chunk, final ChunkStage stage) {
