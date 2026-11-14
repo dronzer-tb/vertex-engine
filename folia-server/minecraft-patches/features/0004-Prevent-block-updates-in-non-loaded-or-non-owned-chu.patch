@@ -9,10 +9,10 @@ add explicit block update suppression techniques, it's better
 than the server crashing.
 
 diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
-index 50513de68e35f235083ed547f185a485d91ae7ad..d7d4175acbd2028649edebf7bec05858a39c9900 100644
+index faec81c45af77876ebdb33eb8395c2a33115c415..a8401a953a955a69f39fa13e9678d177796889f0 100644
 --- a/net/minecraft/world/level/Level.java
 +++ b/net/minecraft/world/level/Level.java
-@@ -2220,7 +2220,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+@@ -2118,7 +2118,7 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
      public void updateNeighbourForOutputSignal(final BlockPos pos, final Block changedBlock) {
          for (Direction direction : Direction.Plane.HORIZONTAL) {
              BlockPos relativePos = pos.relative(direction);
@@ -52,7 +52,7 @@ index 03c878a4f539e290dda30adcf5a375199be6e676..36f10c676db121dc1f9cebe85eadfd92
          }
  
 diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecraft/world/level/block/RedStoneWireBlock.java
-index 0161276f2259d7572d02d0a38041b05cc65d54e5..56a16bdb811bade1851b22c627e1a0da5a8b9792 100644
+index ba408de343d6fe8a2d88a6e4a644d102a16a298e..957c45b39e9d6f74fb9791ecd121b0e2bd6bc732 100644
 --- a/net/minecraft/world/level/block/RedStoneWireBlock.java
 +++ b/net/minecraft/world/level/block/RedStoneWireBlock.java
 @@ -215,8 +215,9 @@ public class RedStoneWireBlock extends Block {
