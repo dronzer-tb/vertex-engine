@@ -95,7 +95,15 @@ public final class VertexChunkBridge {
      * and {@link ChunkStage#NOISE} is owned unconditionally. The chunk-level check still matters,
      * because a chunk that fell back must still get vanilla noise.
      */
-    public static boolean skipNoise(final ChunkAccess chunk) {
+    public static boolean skipNoise(final ServerLevel level, final ChunkGenerator generator,
+                                    final ChunkAccess chunk) {
+        // vertexGeneratedTerrain is not saved. A chunk the module generated at BIOMES that was
+        // unloaded and read back before NOISE arrives here without it, and used to get vanilla
+        // noise, surface and carvers on top -- ~4% of chunks under Chunky. Generating it again is
+        // deterministic and far cheaper than the vanilla passes.
+        if (!chunk.vertexGeneratedTerrain) {
+            generateChunk(level, generator, chunk);
+        }
         return ownsStageFor(chunk, ChunkStage.NOISE);
     }
 

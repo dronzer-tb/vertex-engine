@@ -78,7 +78,7 @@ index 478771c9f01d8674727cffdff90008c3b8608d69..092bf239a1f37307ce254bbe242a9f42
      ) {
          ServerLevel level = context.level();
 +        // Vertex start - a module already produced this chunk's terrain at the BIOMES stage
-+        if (dev.vertex.engine.VertexChunkBridge.skipNoise(chunk)) {
++        if (dev.vertex.engine.VertexChunkBridge.skipNoise(level, context.generator(), chunk)) {
 +            return CompletableFuture.completedFuture(chunk);
 +        }
 +        final long vertexBegunAt = dev.vertex.engine.VertexChunkTimings.begin();
