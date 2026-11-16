@@ -118,6 +118,24 @@ public final class VertexChunkBridge {
         return ownsStageFor(chunk, ChunkStage.SURFACE);
     }
 
+    /**
+     * Whether the server must skip its own feature placement for this chunk: the module already
+     * decorated it. Structures are placed regardless; only the per-step feature loop is skipped.
+     */
+    public static boolean skipFeatures(final ServerLevel level, final ChunkGenerator generator,
+                                       final ChunkAccess chunk) {
+        // As in skipNoise: a reload loses the flag, and running vanilla features over terrain the
+        // module already decorated would place everything twice. Nothing writes this chunk
+        // between the module's write and here (the server's noise, surface and carver passes
+        // are skipped, and structures only write the chunk being decorated), so regenerating
+        // reproduces exactly what was there.
+        VertexEngine engine = VertexEngine.get();
+        if (!chunk.vertexGeneratedTerrain && engine != null && engine.ownsStage(ChunkStage.FEATURES)) {
+            generateChunk(level, generator, chunk);
+        }
+        return ownsStageFor(chunk, ChunkStage.FEATURES);
+    }
+
     /** Whether the server must skip its own carvers for this chunk. See {@link #skipSurface}. */
     public static boolean skipCarvers(final ChunkAccess chunk) {
         return ownsStageFor(chunk, ChunkStage.CARVERS);

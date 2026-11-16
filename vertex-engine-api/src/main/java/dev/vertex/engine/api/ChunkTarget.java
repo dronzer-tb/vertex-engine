@@ -79,4 +79,49 @@ public interface ChunkTarget {
      * @param indices one index into {@code palette} per 4x4x4 quart, same section ordering
      */
     void setBiomes(String[] palette, short[] indices);
+
+    /*
+     * What a module that owns ChunkStage.FEATURES writes besides blocks. Coordinates are
+     * world-absolute and must lie inside this chunk. The defaults refuse, so a module never
+     * believes an engine stored something it cannot.
+     */
+
+    /**
+     * Adds a block entity, as vanilla's feature pass would leave it: SNBT with {@code id},
+     * {@code x}, {@code y}, {@code z} and its data, e.g. a dungeon chest's {@code LootTable}.
+     *
+     * @since 0.2.0
+     */
+    default void addBlockEntity(String snbt) {
+        throw new UnsupportedOperationException("this engine does not take block entities");
+    }
+
+    /**
+     * Schedules a fluid tick, e.g. for a spring, so the fluid flows once the chunk is loaded.
+     *
+     * @param fluid fluid id, e.g. {@code "minecraft:water"}
+     * @since 0.2.0
+     */
+    default void scheduleFluidTick(int x, int y, int z, String fluid) {
+        throw new UnsupportedOperationException("this engine does not take scheduled ticks");
+    }
+
+    /**
+     * Schedules a block tick.
+     *
+     * @param block block id, e.g. {@code "minecraft:magma_block"}
+     * @since 0.2.0
+     */
+    default void scheduleBlockTick(int x, int y, int z, String block) {
+        throw new UnsupportedOperationException("this engine does not take scheduled ticks");
+    }
+
+    /**
+     * Marks a block for the shape update vanilla runs when the chunk is promoted to a full chunk.
+     *
+     * @since 0.2.0
+     */
+    default void markForPostProcessing(int x, int y, int z) {
+        throw new UnsupportedOperationException("this engine does not take post-processing marks");
+    }
 }

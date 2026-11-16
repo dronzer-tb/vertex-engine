@@ -50,8 +50,21 @@ index 28f703204afd834cd50335346ef065670d6b37ad..81182f57ba4f8a0e9a778521794927ff
      // CraftBukkit start - SPIGOT-6814: move to ChunkAccess to account for 1.17 to 1.18 chunk upgrading.
      private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
      public org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer persistentDataContainer = new org.bukkit.craftbukkit.persistence.DirtyCraftPersistentDataContainer(ChunkAccess.DATA_TYPE_REGISTRY);
+diff --git a/net/minecraft/world/level/chunk/ChunkGenerator.java b/net/minecraft/world/level/chunk/ChunkGenerator.java
+index b7325170369299a74be35ecc66a6446c301605b8..cb1bf739c1a8c9149e20755d503ac941fd123bc1 100644
+--- a/net/minecraft/world/level/chunk/ChunkGenerator.java
++++ b/net/minecraft/world/level/chunk/ChunkGenerator.java
+@@ -387,7 +387,7 @@ public abstract class ChunkGenerator {
+                         }
+                     }
+ 
+-                    if (stepIndex < featureStepCount) {
++                    if (stepIndex < featureStepCount && !dev.vertex.engine.VertexChunkBridge.skipFeatures(level.getLevel(), this, chunk)) { // Vertex - a module that decorates natively already placed these
+                         IntSet possibleFeaturesThisStep = new IntArraySet();
+ 
+                         for (Holder<Biome> biome : possibleBiomes) {
 diff --git a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
-index 478771c9f01d8674727cffdff90008c3b8608d69..092bf239a1f37307ce254bbe242a9f420846917d 100644
+index 478771c9f01d8674727cffdff90008c3b8608d69..5bda339db4014baa152bcc4984207a90b0fa3bcf 100644
 --- a/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
 +++ b/net/minecraft/world/level/chunk/status/ChunkStatusTasks.java
 @@ -77,6 +77,18 @@ public class ChunkStatusTasks {

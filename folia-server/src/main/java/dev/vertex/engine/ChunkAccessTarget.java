@@ -5,7 +5,13 @@ import dev.vertex.engine.api.ChunkTarget;
 import io.netty.buffer.Unpooled;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.TagParser;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.ticks.ScheduledTick;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.QuartPos;
@@ -161,6 +167,38 @@ final class ChunkAccessTarget implements ChunkTarget {
         } finally {
             target.release();
         }
+    }
+
+    @Override
+    public void addBlockEntity(String snbt) {
+        CompoundTag tag;
+        try {
+            tag = TagParser.parseCompoundFully(snbt);
+        } catch (CommandSyntaxException e) {
+            throw new IllegalArgumentException("module returned unparseable block entity SNBT: " + snbt, e);
+        }
+        // Kept as NBT on the proto chunk and created when it is promoted, the same route a block
+        // entity saved by vanilla's own feature pass takes after a reload.
+        this.chunk.setBlockEntityNbt(tag);
+    }
+
+    @Override
+    public void scheduleFluidTick(int x, int y, int z, String fluid) {
+        Fluid type = BuiltInRegistries.FLUID.getValue(Identifier.parse(fluid));
+        // A proto chunk keeps neither the delay nor the order (ProtoChunkTicks stores delay 0 and
+        // dedupes by position and type), so neither is worth computing here.
+        this.chunk.getFluidTicks().schedule(new ScheduledTick<>(type, new BlockPos(x, y, z), 0L, 0L));
+    }
+
+    @Override
+    public void scheduleBlockTick(int x, int y, int z, String block) {
+        Block type = BuiltInRegistries.BLOCK.getValue(Identifier.parse(block));
+        this.chunk.getBlockTicks().schedule(new ScheduledTick<>(type, new BlockPos(x, y, z), 0L, 0L));
+    }
+
+    @Override
+    public void markForPostProcessing(int x, int y, int z) {
+        this.chunk.markPosForPostProcessing(new BlockPos(x, y, z));
     }
 
     @Override

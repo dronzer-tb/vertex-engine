@@ -46,5 +46,18 @@ public enum ChunkStage {
      * hook reports success for. A chunk left with its default biome grid is not merely slower, it
      * is wrong -- mob spawning, foliage colour and structure placement all read it.
      */
-    BIOMES
+    BIOMES,
+
+    /**
+     * Biome features: ores, trees, vegetation, lakes, geodes and the rest of the placed features.
+     * The module's blocks already include them, plus what features leave behind besides blocks:
+     * block entities, scheduled ticks and post-processing marks, through the matching
+     * {@link ChunkTarget} methods.
+     *
+     * <p>Owning this skips only the server's feature placement. Structures are still placed by
+     * the server in the same pass, step by step, on top of the module's decorated terrain.
+     *
+     * @since 0.2.0
+     */
+    FEATURES
 }
