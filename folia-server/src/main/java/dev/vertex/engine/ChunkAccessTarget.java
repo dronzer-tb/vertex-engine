@@ -2,7 +2,10 @@ package dev.vertex.engine;
 
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.vertex.engine.api.ChunkTarget;
+import io.netty.buffer.Unpooled;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.core.Holder;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.QuartPos;
@@ -29,6 +32,16 @@ import net.minecraft.core.RegistryAccess;
  * that owns it.
  */
 final class ChunkAccessTarget implements ChunkTarget {
+
+    /**
+     * Parsed block states by the module's string. A module's palette only grows and its strings
+     * mean the same thing for the server's lifetime, so parsing each one once is enough; before
+     * this every chunk re-parsed the whole palette.
+     */
+    private static final ConcurrentHashMap<String, BlockState> PARSED_STATES = new ConcurrentHashMap<>();
+
+    /** Largest network-format section: bits byte, 256 varint palette ids, 512 longs. */
+    private static final int SECTION_BUFFER_BYTES = 1 + 5 + 256 * 5 + 512 * Long.BYTES;
 
     private final ChunkAccess chunk;
     private final RegistryAccess registries;
@@ -62,23 +75,91 @@ final class ChunkAccessTarget implements ChunkTarget {
         for (int section = 0; section < sectionCount; section++) {
             LevelChunkSection target = this.chunk.getSection(
                     this.chunk.getSectionIndexFromSectionY(minSectionY + section));
-            int base = section * 4096;
-            // acquire()/release() rather than the per-call threading check: the whole section is
-            // written here in one go, and the check is per setBlockState.
-            target.acquire();
-            try {
-                for (int i = 0; i < 4096; i++) {
-                    BlockState state = states[indices[base + i] & 0xFFFF];
-                    if (state.isAir()) {
-                        // Sections start empty; writing air back costs a palette lookup per block
-                        // for no change.
-                        continue;
-                    }
-                    target.setBlockState(i & 15, (i >> 8) & 15, (i >> 4) & 15, state, false);
-                }
-            } finally {
-                target.release();
+            writeSection(target, states, indices, section * 4096);
+        }
+    }
+
+    /**
+     * Installs each packed section whole through {@code PalettedContainer.read}, the public
+     * network-format reader, which swaps in the palette and the bit storage in one step. Its
+     * format is the module's layout with global registry ids in the palette, so the section is
+     * only re-framed here, never unpacked.
+     */
+    @Override
+    public void setSections(String[] palette, short[][] sectionPalettes, long[][] packed, short[][] raw) {
+        int sectionCount = height() / 16;
+        if (sectionPalettes.length != sectionCount || packed.length != sectionCount || raw.length != sectionCount) {
+            throw new IllegalArgumentException("expected " + sectionCount + " sections, got "
+                    + sectionPalettes.length + "/" + packed.length + "/" + raw.length);
+        }
+        BlockState[] states = resolveBlocks(palette);
+        int[] globalIds = new int[states.length];
+        for (int i = 0; i < states.length; i++) {
+            globalIds[i] = Block.BLOCK_STATE_REGISTRY.getId(states[i]);
+        }
+
+        FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer(SECTION_BUFFER_BYTES));
+        int minSectionY = this.chunk.getMinSectionY();
+        for (int section = 0; section < sectionCount; section++) {
+            LevelChunkSection target = this.chunk.getSection(
+                    this.chunk.getSectionIndexFromSectionY(minSectionY + section));
+            if (raw[section] != null) {
+                writeSection(target, states, raw[section], 0);
+                continue;
             }
+            short[] local = sectionPalettes[section];
+            int n = local.length;
+            if (n < 1 || n > 256) {
+                throw new IllegalArgumentException("section " + section + " palette has " + n + " entries");
+            }
+            if (n == 1 && states[local[0] & 0xFFFF].isAir()) {
+                // Sections start empty.
+                continue;
+            }
+            int bits = n == 1 ? 0 : Math.max(4, 32 - Integer.numberOfLeadingZeros(n - 1));
+            int longs = bits == 0 ? 0 : (4096 + 64 / bits - 1) / (64 / bits);
+            long[] words = packed[section];
+            if (words.length != longs) {
+                throw new IllegalArgumentException("section " + section + " has " + words.length
+                        + " packed longs, " + n + " palette entries need " + longs);
+            }
+
+            buffer.clear();
+            buffer.writeByte(bits);
+            if (bits == 0) {
+                buffer.writeVarInt(globalIds[local[0] & 0xFFFF]);
+            } else {
+                buffer.writeVarInt(n);
+                for (short entry : local) {
+                    buffer.writeVarInt(globalIds[entry & 0xFFFF]);
+                }
+                for (long word : words) {
+                    buffer.writeLong(word);
+                }
+            }
+            target.getStates().read(buffer);
+            target.recalcBlockCounts();
+        }
+    }
+
+    /**
+     * The per-block path: {@link #setBlocks}, and a packed section with more distinct states than
+     * a local palette holds. acquire()/release() rather than the per-call threading check, since
+     * the whole section is written in one go.
+     */
+    private static void writeSection(LevelChunkSection target, BlockState[] states, short[] indices, int base) {
+        target.acquire();
+        try {
+            for (int i = 0; i < 4096; i++) {
+                BlockState state = states[indices[base + i] & 0xFFFF];
+                if (state.isAir()) {
+                    // Sections start empty; writing air back costs a palette lookup for no change.
+                    continue;
+                }
+                target.setBlockState(i & 15, (i >> 8) & 15, (i >> 4) & 15, state, false);
+            }
+        } finally {
+            target.release();
         }
     }
 
@@ -117,12 +198,14 @@ final class ChunkAccessTarget implements ChunkTarget {
         HolderLookup<Block> blocks = this.registries.lookupOrThrow(Registries.BLOCK);
         BlockState[] states = new BlockState[palette.length];
         for (int i = 0; i < palette.length; i++) {
-            try {
-                states[i] = BlockStateParser.parseForBlock(blocks, palette[i], false).blockState();
-            } catch (CommandSyntaxException e) {
-                throw new IllegalArgumentException(
-                        "module returned an unparseable block state: " + palette[i], e);
-            }
+            states[i] = PARSED_STATES.computeIfAbsent(palette[i], name -> {
+                try {
+                    return BlockStateParser.parseForBlock(blocks, name, false).blockState();
+                } catch (CommandSyntaxException e) {
+                    throw new IllegalArgumentException(
+                            "module returned an unparseable block state: " + name, e);
+                }
+            });
         }
         return states;
     }

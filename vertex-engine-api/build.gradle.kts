@@ -10,7 +10,7 @@ group = "dev.vertex"
 // SNAPSHOT while the API is still moving. GitHub Packages refuses to overwrite a release
 // version -- a second publish of 0.1.0 is a 409 -- so a fixed version during development means
 // modules silently compile against whichever build happened to land first.
-version = "0.1.0-SNAPSHOT"
+version = "0.2.0-SNAPSHOT"
 
 description = "Compile-time API for Vertex Engine modules. Contains no Minecraft types."
 

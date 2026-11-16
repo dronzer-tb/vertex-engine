@@ -48,9 +48,10 @@ jobs:
 
       # Modules build against this coordinate, so it has to exist somewhere they can resolve it
       # from. Only from the default branch: a feature branch republishing 0.1.0 would silently
-      # change what every module compiles against.
+      # change what every module compiles against. perf/bulk-sections publishes 0.2.0-SNAPSHOT,
+      # a version only modules that opt into setSections resolve; drop it once that merges.
       - name: Publish Vertex Engine API
-        if: github.ref == 'refs/heads/vertex' && github.event_name == 'push'
+        if: (github.ref == 'refs/heads/vertex' || github.ref == 'refs/heads/perf/bulk-sections') && github.event_name == 'push'
         run: ./gradlew :vertex-engine-api:publishAllPublicationsToGitHubPackagesRepository
         env:
           GITHUB_ACTOR: ${{ github.actor }}
